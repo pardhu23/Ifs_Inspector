@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IFS OData Inspector</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<div id="views-bar">
+  <button class="view-tab active" data-view="requests">Requests</button>
+  <span id="views-bar-spacer"></span>
+  <button id="theme-toggle" class="theme-toggle-btn" title="Toggle light/dark theme">☀ Light</button>
+</div>
+<div id="app">
+  <!-- ── LEFT SIDEBAR (30%) ── -->
+  <div id="sidebar">
+    <div id="sidebar-toolbar">
+      <button id="btn-clear" title="Clear all requests">⊘</button>
+      <button id="btn-pause" title="Pause capturing">⏸</button>
+      <input id="filter-input" type="text" placeholder="Filter requests…" />
+      <div id="sidebar-count-group">
+        <span id="req-count">0 requests</span>
+        <button id="sidebar-cog-btn" class="log-cog-btn" title="Excluded URL patterns">⚙</button>
+      </div>
+    </div>
+    <div id="method-filter-bar">
+      <button class="mf-btn active" data-method="ALL">ALL</button>
+      <button class="mf-btn mf-get"    data-method="GET">GET</button>
+      <button class="mf-btn mf-post"   data-method="POST">POST</button>
+      <button class="mf-btn mf-put"    data-method="PUT">PUT</button>
+      <button class="mf-btn mf-patch"  data-method="PATCH">PATCH</button>
+      <button class="mf-btn mf-delete" data-method="DELETE">DEL</button>
+    </div>
+    <div id="request-list"></div>
+  </div>
+
+  <!-- ── SIDEBAR DIVIDER ── -->
+  <div id="divider"></div>
+
+  <!-- ── RIGHT PANEL: detail 70% + client logs 30% ── -->
+  <div id="right-panel">
+
+    <!-- DETAIL PANE (70%) -->
+    <div id="detail-pane">
+      <div id="empty-state">
+        <div class="empty-icon">⬡</div>
+        <div class="empty-title">IFS Inspector</div>
+        <div class="empty-sub">Select a request from the left panel to inspect it.</div>
+      </div>
+
+      <div id="detail-content" style="display:none">
+
+        <!-- ── DETAIL TAB BAR ── -->
+        <div id="detail-tabs">
+          <button class="detail-tab-btn active" data-dtab="summary">Summary</button>
+          <button class="detail-tab-btn" data-dtab="trace">Trace</button>
+          <button class="detail-tab-btn" data-dtab="waterfall">Waterfall</button>
+          <button class="detail-tab-btn" data-dtab="request">Request</button>
+          <button class="detail-tab-btn" data-dtab="response">Response</button>
+          <button class="detail-tab-btn" data-dtab="server">Server</button>
+        </div>
+
+        <!-- ══ SUMMARY TAB ══ -->
+        <div id="dtab-summary" class="detail-tab-pane active">
+
+          <!-- Stat chips bar -->
+          <div id="detail-summary-bar"></div>
+
+          <!-- Request + Response side by side -->
+          <div id="req-resp-grid">
+            <div class="detail-card" id="card-request">
+              <div class="detail-card-header"><span class="detail-card-title">Request</span><span class="detail-card-toggle">▾</span></div>
+              <div class="detail-card-body" id="req-card-body"></div>
+            </div>
+            <div class="detail-card" id="card-response">
+              <div class="detail-card-header"><span class="detail-card-title">Response</span><span class="detail-card-toggle">▾</span></div>
+              <div class="detail-card-body" id="resp-card-body"></div>
+            </div>
+          </div>
+
+          <!-- Trace section (collapsible) -->
+          <div id="trace-section">
+            <div class="section-hdr" id="trace-section-hdr">
+              <span class="section-hdr-toggle">▾</span>
+              <span class="section-hdr-title">Trace</span>
+              <span class="section-hdr-meta" id="trace-hdr-meta"></span>
+              <div class="section-hdr-actions" id="trace-hdr-actions"></div>
+            </div>
+            <div id="trace-section-body">
+              <div id="tab-trace"></div>
+            </div>
+          </div>
+
+          <!-- Exceptions section (collapsible, only when errors exist) -->
+          <div id="exc-section" style="display:none">
+            <div class="section-hdr has-errors" id="exc-section-hdr">
+              <span class="section-hdr-toggle">▾</span>
+              <span class="section-hdr-title">Exceptions</span>
+              <span class="section-hdr-meta" id="exc-hdr-meta"></span>
+            </div>
+            <div id="exc-section-body">
+              <div id="tab-exceptions"></div>
+            </div>
+          </div>
+
+        </div><!-- /#dtab-summary -->
+
+        <!-- ══ TRACE TAB ══ -->
+        <div id="dtab-trace" class="detail-tab-pane">
+          <div id="tab-trace-standalone"></div>
+        </div>
+
+        <!-- ══ WATERFALL TAB ══ -->
+        <div id="dtab-waterfall" class="detail-tab-pane">
+          <div id="tab-waterfall"></div>
+        </div>
+
+        <!-- ══ REQUEST TAB ══ -->
+        <div id="dtab-request" class="detail-tab-pane">
+          <div id="tab-request"></div>
+        </div>
+
+        <!-- ══ RESPONSE TAB ══ -->
+        <div id="dtab-response" class="detail-tab-pane">
+          <div id="tab-response"></div>
+        </div>
+
+        <!-- ══ SERVER TAB ══ -->
+        <div id="dtab-server" class="detail-tab-pane">
+          <div id="tab-server"></div>
+        </div>
+
+      </div><!-- /#detail-content -->
+    </div><!-- /#detail-pane -->
+
+    <!-- ── CLIENT LOGS DIVIDER ── -->
+    <div id="logs-divider"></div>
+
+    <!-- ── CLIENT LOGS SIDE PANEL (30%) ── -->
+    <div id="client-logs-panel">
+      <div id="logs-panel-header">
+        <span class="logs-panel-title">Client Logs <span id="log-count-badge"></span></span>
+        <button id="logs-swap-btn" class="logs-action-btn" title="Move to bottom">⬇</button>
+        <button id="logs-collapse-btn" class="logs-action-btn" title="Dock (collapse to header)">⊟</button>
+        <button id="log-cog-btn" class="log-cog-btn" title="Hidden message patterns">⚙</button>
+      </div>
+      <div id="log-toolbar" class="log-tab-toolbar">
+        <input id="log-search" class="log-tab-search" type="text" placeholder="Search logs…">
+        <select id="log-sev" class="log-tab-sev-filter">
+          <option value="ALL">ALL</option>
+          <option value="Info">Info</option>
+          <option value="Warning">Warning</option>
+          <option value="Error">Error</option>
+        </select>
+        <span id="log-count" class="log-tab-count"></span>
+      </div>
+      <div id="log-list" class="log-scroll"></div>
+    </div>
+
+  </div><!-- /#right-panel -->
+</div><!-- /#app -->
+
+<!-- ── DOCKED CLIENT LOGS (bottom, hidden by default) ── -->
+<div id="client-logs-docked" style="display:none">
+  <div id="docked-resize-handle"></div>
+  <div id="docked-logs-header">
+    <span class="logs-panel-title">Client Logs <span id="log-count-badge-docked"></span></span>
+    <button id="logs-swap-btn-docked" class="logs-action-btn" title="Move to side">⬆</button>
+    <button id="logs-collapse-btn-docked" class="logs-action-btn" title="Dock (collapse to header)">⊟</button>
+    <button id="log-cog-btn-docked" class="log-cog-btn" title="Hidden message patterns">⚙</button>
+  </div>
+  <div class="log-tab-toolbar">
+    <input id="log-search-docked" class="log-tab-search" type="text" placeholder="Search logs…">
+    <select id="log-sev-docked" class="log-tab-sev-filter">
+      <option value="ALL">ALL</option>
+      <option value="Info">Info</option>
+      <option value="Warning">Warning</option>
+      <option value="Error">Error</option>
+    </select>
+    <span id="log-count-docked" class="log-tab-count"></span>
+  </div>
+  <div id="log-list-docked" class="log-scroll"></div>
+</div>
+
+<script src="panel.js"></script>
+</body>
+</html>

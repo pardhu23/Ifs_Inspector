@@ -1,0 +1,46 @@
+{
+    "manifest_version": 3,
+    "name": "IFS Inspector",
+    "short_name": "IFS Inspector",
+    "description": "Deep inspection of IFS Cloud OData requests — trace viewer, runtime waterfall, request timeline",
+    "version": "1.4.0",
+
+    "devtools_page": "devtools/devtools.html",
+
+    "background": {
+        "service_worker": "service-worker.js"
+    },
+
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content/hook-injector.js"],
+            "run_at": "document_start"
+        },
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content/proxy.js"],
+            "run_at": "document_idle"
+        }
+    ],
+
+    "web_accessible_resources": [
+        {
+            "resources": ["content/inject-hook.js", "content/backend.js"],
+            "matches": ["<all_urls>"]
+        }
+    ],
+
+    "icons": {
+        "48": "icons/icon-48.png",
+        "96": "icons/icon-96.png"
+    },
+
+    "host_permissions": [
+        "<all_urls>"
+    ],
+
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self';"
+    }
+}
