@@ -1,5 +1,8 @@
 # Ifs_Inspector — Chrome DevTools Extension
 
+<img width="1000" height="499" alt="image" src="https://github.com/user-attachments/assets/6975c915-74d1-49ba-8092-7884f621a450" />
+
+
 A Chrome DevTools extension that transforms raw IFS Cloud PL/SQL trace output into a clean, structured, interactive debugging panel — right inside your browser.
 
 > The backend logic, tracing infrastructure, and heavy lifting are already handled by IFS. This extension organises and presents that trace data in a developer-friendly way.
