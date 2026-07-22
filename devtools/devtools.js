@@ -21,6 +21,7 @@ chrome.devtools.panels.create('IFS Inspector', '', '../panel/panel.html',
     panel.onShown.addListener(function (panelWindow) {
       if (panelWindow.connectDevtools) {
         port = panelWindow.connectDevtools();
+        port.onmessage = handlePanelMessage;
       }
       queue.splice(0).forEach(function (msg) { port && port.postMessage(msg); });
     });
@@ -28,6 +29,29 @@ chrome.devtools.panels.create('IFS Inspector', '', '../panel/panel.html',
     panel.onHidden.addListener(function () {
       port = null;
     });
+
+    // ── Panel → page: restore an (edited) clipboard snapshot ──────────────────
+    // The Clipboard tab lets the user pick a past copy, edit fields, then push
+    // it back into the page so a subsequent "Paste Rows" in IFS uses it.
+    // This writes directly via inspectedWindow.eval — no content-script round
+    // trip needed, since it's a one-shot write rather than an ongoing stream.
+    function handlePanelMessage(event) {
+      var msg = event.data;
+      if (!msg || msg.type !== 'RESTORE_CLIPBOARD') return;
+
+      var json = JSON.stringify(msg.rows || []);
+      chrome.devtools.inspectedWindow.eval(
+        '(function(){' +
+        '  try {' +
+        '    localStorage.setItem("IFS-Aurena-CopyPasteRecordStorage", ' + JSON.stringify(json) + ');' +
+        '    return true;' +
+        '  } catch (e) { return false; }' +
+        '})()',
+        function (result, isException) {
+          send({ type: 'RESTORE_CLIPBOARD_RESULT', ok: !!result && !isException, requestId: msg.requestId });
+        }
+      );
+    }
 
     function send(msg) {
       if (port) {

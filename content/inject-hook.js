@@ -11,6 +11,57 @@
 (function () {
     'use strict';
 
+    // ── Clipboard watcher (runs unconditionally, before the early-return below) ─
+    // IFS's own "Copy Selected Rows" grid action writes the selection as a JSON
+    // array into localStorage['IFS-Aurena-CopyPasteRecordStorage']. Each copy
+    // overwrites the previous value — there is no history and no editing.
+    // We monkeypatch localStorage.setItem at document_start (before any IFS app
+    // code runs) so we see every write the instant it happens, then emit it
+    // through whichever hook object ends up installed (ours or IFS Cloud Web
+    // DevTools') as a 'd:clipboard' event. This must live outside the
+    // "already installed" early-return below so it runs regardless of which
+    // hook implementation wins.
+
+    // Pulls the IFS page name out of URLs like:
+    //   .../web/page/AssignmentTypes/List;path=...
+    //   .../web/page/ContactRoles/List;path=...
+    // Falls back to the document title (minus any " - IFS" suffix) if the
+    // URL doesn't match the expected /page/<Name>/ shape.
+    function currentIfsPageName() {
+        try {
+            var m = window.location.pathname.match(/\/page\/([^\/;]+)/i);
+            if (m && m[1]) return decodeURIComponent(m[1]);
+        } catch (e) { /* fall through to title */ }
+        return (document.title || '').replace(/\s*-\s*IFS.*$/i, '').trim() || null;
+    }
+
+    (function installClipboardWatcher() {
+        var CLIP_KEY = 'IFS-Aurena-CopyPasteRecordStorage';
+        var originalSetItem = window.localStorage.setItem;
+
+        window.localStorage.setItem = function (key, value) {
+            var result = originalSetItem.apply(this, arguments);
+            if (key === CLIP_KEY) {
+                try {
+                    var rows = JSON.parse(value);
+                    var hook = window.__IFS_AURENA_DEVTOOLS__;
+                    if (hook && typeof hook.emit === 'function') {
+                        hook.emit('d:clipboard', {
+                            rows: rows,
+                            raw: value,
+                            ts: Date.now(),
+                            page: currentIfsPageName(),
+                            url: window.location.href,
+                        });
+                    }
+                } catch (e) {
+                    // Not JSON, or hook not ready yet — ignore silently.
+                }
+            }
+            return result;
+        };
+    }());
+
     var existing = window.__IFS_AURENA_DEVTOOLS__;
 
     // Already a proper hook object installed by IFS Cloud Web DevTools —

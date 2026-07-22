@@ -8,6 +8,7 @@
 <body>
 <div id="views-bar">
   <button class="view-tab active" data-view="requests">Requests</button>
+  <button class="view-tab" data-view="clipboard">Copied Rows</button>
   <span id="views-bar-spacer"></span>
   <button id="theme-toggle" class="theme-toggle-btn" title="Toggle light/dark theme">☀ Light</button>
 </div>
@@ -159,6 +160,10 @@
 
   </div><!-- /#right-panel -->
 </div><!-- /#app -->
+
+<!-- ── CLIPBOARD HISTORY VIEW (hidden unless the Clipboard tab is active) ── -->
+<div id="view-clipboard" style="display:none"></div>
+
 
 <!-- ── DOCKED CLIENT LOGS (bottom, hidden by default) ── -->
 <div id="client-logs-docked" style="display:none">

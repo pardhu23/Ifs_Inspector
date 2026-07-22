@@ -40,9 +40,20 @@
         }, '*');
     }
 
+    // Clipboard snapshots (IFS "Copy Selected Rows") are forwarded as their
+    // own hookPayload.type so panel.js can route them separately from the
+    // trace/waterfall 'd:message' stream.
+    function forwardClipboard(payload) {
+        window.postMessage({
+            source: MSG_SOURCE,
+            payload: { type: 'IFS_HOOK_EVENT', hookPayload: { type: 'clipboard', data: payload } },
+        }, '*');
+    }
+
     // Subscribe and remember what we subscribed to so we can detect swaps.
     function subscribe(h) {
         h.on('d:message', forward);
+        h.on('d:clipboard', forwardClipboard);
         window.__IFS_AURENA_DEVTOOLS_SHOWN__ = true;
         if (h.enabled === undefined) h.enabled = true;
     }

@@ -65,7 +65,10 @@ body { display: flex; flex-direction: column; }
     padding: 0 8px;
 }
 .view-tab {
-    display: none; /* Hide Requests tab text to save space */
+    display: inline-flex; align-items: center;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--text2); cursor: pointer; font-size: 12px; font-weight: 500;
+    padding: 8px 14px; white-space: nowrap;
 }
 .view-tab:hover { color: var(--text); }
 .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
@@ -1451,3 +1454,105 @@ body {
     background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0;
     flex-wrap: wrap; width: 100%;
 }
+
+/* ── Clipboard History view ─────────────────────────────────────────────────── */
+#view-clipboard { flex: 1; display: flex; overflow: hidden; height: 100%; }
+
+.clip-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; width: 100%; gap: 10px; }
+
+#clip-history-list {
+    width: 260px; min-width: 200px; max-width: 40vw; flex-shrink: 0;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); background: var(--bg2);
+}
+#clip-history-hdr {
+    display: flex; align-items: center; gap: 4px;
+    padding: 6px 8px 6px 10px; font-size: 11px; font-weight: 600; color: var(--text2);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#clip-history-hdr-label { white-space: nowrap; }
+#clip-history-hdr-spacer { flex: 1; }
+#clip-export-btn, #clip-import-btn {
+    background: none; border: 1px solid var(--border2); color: var(--text2);
+    cursor: pointer; border-radius: 3px; padding: 3px 8px; font-size: 10px; font-weight: 500;
+    white-space: nowrap;
+}
+#clip-export-btn:hover, #clip-import-btn:hover { background: var(--bg4); color: var(--text); }
+.clip-import-btn {
+    background: none; border: 1px solid var(--border2); color: var(--text2);
+    cursor: pointer; border-radius: 4px; padding: 6px 14px; font-size: 12px; font-weight: 500;
+    margin-top: 4px;
+}
+.clip-import-btn:hover { background: var(--bg4); color: var(--text); }
+#clip-history-items { flex: 1; overflow-y: auto; }
+#clip-history-items::-webkit-scrollbar { width: 8px; }
+#clip-history-items::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+.clip-hist-item {
+    position: relative; padding: 8px 54px 8px 10px; cursor: pointer;
+    border-bottom: 1px solid var(--border); border-left: 3px solid transparent;
+}
+.clip-hist-item:hover  { background: var(--bg3); }
+.clip-hist-item.active { background: rgba(79,195,247,.10); border-left-color: var(--accent); }
+.clip-hist-page    { font-size: 11px; font-weight: 600; color: var(--accent); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip-hist-time    { font-size: 11px; font-weight: 500; color: var(--text); }
+.clip-hist-count   { font-size: 10px; color: var(--text3); margin-top: 1px; }
+.clip-hist-preview { font-size: 10px; color: var(--text2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip-hist-actions {
+    position: absolute; top: 8px; right: 8px; display: flex; gap: 2px;
+    opacity: 0; transition: opacity .1s;
+}
+.clip-hist-item:hover .clip-hist-actions { opacity: 1; }
+.clip-hist-export, .clip-hist-del {
+    background: none; border: none; color: var(--text3); cursor: pointer;
+    font-size: 11px; padding: 2px 5px; border-radius: 3px;
+}
+.clip-hist-export:hover { color: var(--accent); background: rgba(79,195,247,.10); }
+.clip-hist-del:hover    { color: var(--red); background: rgba(240,96,96,.12); }
+
+#clip-editor { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+#clip-editor-toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
+}
+#clip-editor-title { font-size: 11px; color: var(--text2); font-weight: 500; }
+#clip-editor-spacer { flex: 1; }
+#clip-editor-toolbar button {
+    background: none; border: 1px solid var(--border2); color: var(--text2);
+    cursor: pointer; border-radius: 3px; padding: 3px 10px; font-size: 11px;
+}
+#clip-editor-toolbar button:hover:not(:disabled) { background: var(--bg4); color: var(--text); }
+#clip-editor-toolbar button:disabled { opacity: .4; cursor: default; }
+#clip-restore {
+    background: #1a7a9a; border-color: #1a7a9a; color: #fff; font-weight: 500;
+}
+#clip-restore:hover { background: #1c8bb0; }
+
+#clip-grid-wrap { flex: 1; overflow: auto; }
+#clip-grid { width: 100%; border-collapse: collapse; font-size: 11px; }
+#clip-grid th {
+    position: sticky; top: 0; background: var(--bg2); text-align: left;
+    padding: 6px 8px; border-bottom: 1px solid var(--border2); color: var(--text2);
+    font-weight: 600; white-space: nowrap;
+}
+#clip-grid td { border-bottom: 1px solid var(--border); padding: 2px 4px; }
+#clip-grid td.clip-col-actions, #clip-grid th.clip-col-actions { width: 60px; white-space: nowrap; }
+#clip-grid input[type="text"] {
+    width: 100%; min-width: 90px; background: transparent; border: 1px solid transparent;
+    color: var(--text); padding: 4px 6px; border-radius: 3px; font-size: 11px; font-family: inherit;
+}
+#clip-grid input[type="text"]:hover   { border-color: var(--border2); }
+#clip-grid input[type="text"]:focus   { outline: none; border-color: var(--accent); background: var(--bg3); }
+#clip-grid tr:hover td { background: var(--bg3); }
+
+.clip-row-dup, .clip-row-del {
+    background: none; border: none; color: var(--text3); cursor: pointer;
+    font-size: 11px; padding: 2px 5px; border-radius: 3px;
+}
+.clip-row-dup:hover { color: var(--accent); background: rgba(79,195,247,.10); }
+.clip-row-del:hover { color: var(--red); background: rgba(240,96,96,.10); }
+
+#clip-restore-status { padding: 4px 10px; font-size: 11px; min-height: 20px; flex-shrink: 0; }
+.clip-status-ok  { color: var(--green); }
+.clip-status-err { color: var(--red); }

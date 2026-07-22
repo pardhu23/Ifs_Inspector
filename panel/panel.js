@@ -6,6 +6,7 @@ const LS_MODE       = 'ioi_mode';
 const LS_HIDE_NULL  = 'ioi_hide_null_indent';
 const LS_LOG_HIDDEN = 'ioi_log_hidden';
 const LS_REQ_HIDDEN = 'ioi_req_hidden';
+const LS_CLIPBOARD  = 'ioi_clipboard_history';
 
 // Default URL patterns to exclude from the request sidebar list.
 // Each entry is a substring matched case-insensitively against the full request URL.
@@ -95,6 +96,50 @@ function addNewLogs(rawLogs) {
     return added;
 }
 
+// ─── Clipboard history store ──────────────────────────────────────────────────
+// Every time IFS's "Copy Selected Rows" grid action fires, it overwrites a single
+// localStorage key on the page with the new selection — no history, no editing.
+// We capture each write (via the page-side hook, see inject-hook.js) and keep a
+// capped history here so the user can browse, edit, and re-push an old selection.
+const CLIPBOARD_HISTORY_MAX = 50;
+let clipboardHistory = loadClipboardHistory();
+let clipboardSelectedId = clipboardHistory.length ? clipboardHistory[0].id : null;
+let clipboardDraftRows = null; // working copy while editing the selected entry
+
+function loadClipboardHistory() {
+    try { return JSON.parse(localStorage.getItem(LS_CLIPBOARD)) || []; }
+    catch (e) { return []; }
+}
+function saveClipboardHistory() {
+    try { localStorage.setItem(LS_CLIPBOARD, JSON.stringify(clipboardHistory)); }
+    catch (e) { /* storage quota or disabled — history just won't persist across reloads */ }
+}
+
+// Ingest one clipboard snapshot from the hook. Skips exact-duplicate consecutive
+// copies (e.g. re-render noise) by comparing raw JSON to the most recent entry.
+function addClipboardSnapshot(payload) {
+    const rows = (payload && payload.rows) || [];
+    if (!Array.isArray(rows) || !rows.length) return false;
+
+    const raw = payload.raw || JSON.stringify(rows);
+    if (clipboardHistory.length && clipboardHistory[0].raw === raw) return false;
+
+    const entry = {
+        id:    (payload.ts || Date.now()) + '-' + Math.random().toString(36).slice(2, 7),
+        ts:    payload.ts || Date.now(),
+        rows:  rows,
+        raw:   raw,
+        page:  payload.page || null,
+        url:   payload.url  || null,
+    };
+    clipboardHistory.unshift(entry);
+    if (clipboardHistory.length > CLIPBOARD_HISTORY_MAX) clipboardHistory.length = CLIPBOARD_HISTORY_MAX;
+    saveClipboardHistory();
+    clipboardSelectedId = entry.id;
+    clipboardDraftRows = null; // reset any in-progress edit to show the fresh copy
+    return true;
+}
+
 // ── Debounce + RAF render scheduling ─────────────────────────────────────────
 // Prevents layout thrash and jank when many events fire rapidly.
 function debounce(fn, ms) {
@@ -163,9 +208,11 @@ function isLogHidden(text) {
 }
 
 // ─── Port ─────────────────────────────────────────────────────────────────────
+let devtoolsPort = null; // our end (port1) — used to send messages back to devtools.js
 window.connectDevtools = function() {
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => handleMessage(event.data);
+    devtoolsPort = channel.port1;
     return channel.port2;
 };
 
@@ -209,6 +256,18 @@ function handleMessage(msg) {
     // ── Coexistence notice (not affected by pause) ────────────────────────────
     if (msg.type === 'IFS_COEXIST_WARNING') {
         showCoexistBanner();
+        return;
+    }
+
+    // ── Clipboard snapshot (not affected by pause — separate from trace capture) ─
+    if (msg.type === 'IFS_HOOK_EVENT' && msg.hookPayload && msg.hookPayload.type === 'clipboard') {
+        if (addClipboardSnapshot(msg.hookPayload.data)) renderClipboardView();
+        return;
+    }
+
+    // ── Ack for a restore-to-page request (see requestRestoreClipboard) ───────
+    if (msg.type === 'RESTORE_CLIPBOARD_RESULT') {
+        onRestoreClipboardResult(msg);
         return;
     }
 
@@ -483,14 +542,19 @@ function initClientLogsView() {
     renderClientLogs();
 }
 
-// ── View switching (Requests ↔ Client Logs) ──────────────────────────────────
+// ── View switching (Requests ↔ Client Logs ↔ Clipboard) ──────────────────────
 document.querySelectorAll('.view-tab').forEach(btn => {
     btn.addEventListener('click', () => {
         const view = btn.dataset.view;
         document.querySelectorAll('.view-tab').forEach(b => b.classList.toggle('active', b === btn));
-        document.getElementById('app').style.display              = view === 'requests' ? 'flex' : 'none';
-        document.getElementById('view-client-logs').style.display = view === 'logs'     ? 'flex' : 'none';
+        const appEl = document.getElementById('app');
+        const logsEl = document.getElementById('view-client-logs'); // legacy, no longer a real tab
+        const clipEl = document.getElementById('view-clipboard');
+        if (appEl)  appEl.style.display  = view === 'requests'  ? 'flex' : 'none';
+        if (logsEl) logsEl.style.display = view === 'logs'      ? 'flex' : 'none';
+        if (clipEl) clipEl.style.display = view === 'clipboard' ? 'flex' : 'none';
         if (view === 'logs') renderClientLogs();
+        if (view === 'clipboard') renderClipboardView();
     });
 });
 
@@ -569,7 +633,317 @@ function buildReqHiddenPanel() {
     refresh(); return panel;
 }
 
-// ─── URL parsing ──────────────────────────────────────────────────────────────
+// ─── Clipboard History view ───────────────────────────────────────────────────
+// Renders the history list (left) + editable row grid (right) for whatever
+// entry is currently selected, and wires up restore/edit/delete actions.
+// The schema (which columns exist) is derived from the entry's own rows, since
+// different IFS list pages copy different shapes (Contact Roles vs. others).
+
+let clipboardRestoreSeq = 0;
+const clipboardPendingRestores = new Map(); // requestId → callback
+
+function requestRestoreClipboard(rows, onDone) {
+    if (!devtoolsPort) { onDone && onDone(false, 'DevTools port not connected'); return; }
+    const requestId = 'restore-' + (++clipboardRestoreSeq);
+    clipboardPendingRestores.set(requestId, onDone);
+    devtoolsPort.postMessage({ type: 'RESTORE_CLIPBOARD', rows, requestId });
+}
+
+function onRestoreClipboardResult(msg) {
+    const cb = clipboardPendingRestores.get(msg.requestId);
+    clipboardPendingRestores.delete(msg.requestId);
+    if (cb) cb(!!msg.ok);
+}
+
+function renderClipboardView() { rafSchedule('clipboard', _renderClipboardView); }
+
+function _renderClipboardView() {
+    const root = document.getElementById('view-clipboard');
+    if (!root) return;
+
+    if (!clipboardHistory.length) {
+        root.innerHTML = `
+        <div class="clip-empty">
+            <div class="empty-icon">⧉</div>
+            <div class="empty-title">No copied rows yet</div>
+            <div class="empty-sub">Use "Copy Selected Rows" or "Copy Data Link" on any IFS list page — captures appear here automatically, even across page reloads.</div>
+            <button id="clip-import-empty" class="clip-import-btn">Import History…</button>
+            <input type="file" id="clip-import-file" accept="application/json,.json" style="display:none">
+        </div>`;
+        wireClipboardImportExport(root);
+        return;
+    }
+
+    if (!clipboardHistory.find(e => e.id === clipboardSelectedId)) {
+        clipboardSelectedId = clipboardHistory[0].id;
+        clipboardDraftRows = null;
+    }
+    const entry = clipboardHistory.find(e => e.id === clipboardSelectedId);
+    const rows  = clipboardDraftRows || entry.rows;
+    const dirty = !!clipboardDraftRows;
+
+    // Column set: union of keys across the entry's rows, in first-seen order.
+    const cols = [];
+    rows.forEach(r => Object.keys(r || {}).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+
+    root.innerHTML = `
+    <div id="clip-history-list">
+        <div id="clip-history-hdr">
+            <span id="clip-history-hdr-label">History (${clipboardHistory.length})</span>
+            <span id="clip-history-hdr-spacer"></span>
+            <button id="clip-export-btn" title="Download all history as a JSON file">Export</button>
+            <button id="clip-import-btn" title="Import history from a JSON file (merges, doesn't replace)">Import</button>
+            <input type="file" id="clip-import-file" accept="application/json,.json" style="display:none">
+        </div>
+        <div id="clip-history-items">${clipboardHistory.map(e => `
+            <div class="clip-hist-item${e.id === clipboardSelectedId ? ' active' : ''}" data-id="${e.id}">
+                ${e.page ? `<div class="clip-hist-page">${esc(e.page)}</div>` : ''}
+                <div class="clip-hist-time">${new Date(e.ts).toLocaleTimeString()}</div>
+                <div class="clip-hist-count">${e.rows.length} row${e.rows.length === 1 ? '' : 's'}</div>
+                <div class="clip-hist-preview">${esc(clipRowPreview(e.rows[0]))}${e.rows.length > 1 ? ' …' : ''}</div>
+                <div class="clip-hist-actions">
+                    <button class="clip-hist-export" data-id="${e.id}" title="Export this entry as a JSON file">⤓</button>
+                    <button class="clip-hist-del" data-id="${e.id}" title="Delete this entry">✕</button>
+                </div>
+            </div>`).join('')}
+        </div>
+    </div>
+    <div id="clip-editor">
+        <div id="clip-editor-toolbar">
+            <span id="clip-editor-title">${entry.page ? esc(entry.page) + ' · ' : ''}${rows.length} row${rows.length === 1 ? '' : 's'}${dirty ? ' · edited' : ''}</span>
+            <span id="clip-editor-spacer"></span>
+            <button id="clip-add-row" title="Add a blank row">+ Row</button>
+            <button id="clip-revert" ${dirty ? '' : 'disabled'} title="Discard edits, revert to captured copy">Revert</button>
+            <button id="clip-export-entry" title="Export this entry as a JSON file (includes unsaved edits)">Export</button>
+            <button id="clip-restore" title="Write this back into the page so IFS's Paste Rows uses it">↩ Restore to Page</button>
+        </div>
+        <div id="clip-grid-wrap">
+            <table id="clip-grid">
+                <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}<th class="clip-col-actions"></th></tr></thead>
+                <tbody>${rows.map((r, ri) => `
+                    <tr data-ri="${ri}">${cols.map(c => `
+                        <td><input type="text" data-ri="${ri}" data-col="${esc(c)}" value="${esc(r[c] == null ? '' : r[c])}"></td>
+                    `).join('')}<td class="clip-col-actions">
+                        <button class="clip-row-dup" data-ri="${ri}" title="Duplicate row">⧉</button>
+                        <button class="clip-row-del" data-ri="${ri}" title="Delete row">✕</button>
+                    </td></tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div id="clip-restore-status"></div>
+    </div>`;
+
+    wireClipboardImportExport(root);
+
+    // ── History item selection / delete / per-entry export ───────────────────
+    root.querySelectorAll('.clip-hist-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            if (e.target.closest('.clip-hist-del') || e.target.closest('.clip-hist-export')) return;
+            clipboardSelectedId = item.dataset.id;
+            clipboardDraftRows = null;
+            renderClipboardView();
+        });
+    });
+    root.querySelectorAll('.clip-hist-export').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const entry = clipboardHistory.find(h => h.id === btn.dataset.id);
+            if (entry) exportClipboardEntry(entry);
+        });
+    });
+    root.querySelectorAll('.clip-hist-del').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            clipboardHistory = clipboardHistory.filter(h => h.id !== btn.dataset.id);
+            saveClipboardHistory();
+            if (clipboardSelectedId === btn.dataset.id) { clipboardSelectedId = null; clipboardDraftRows = null; }
+            renderClipboardView();
+        });
+    });
+
+    // ── Cell edits ─────────────────────────────────────────────────────────────
+    root.querySelectorAll('#clip-grid input').forEach(input => {
+        input.addEventListener('input', () => {
+            const draft = (clipboardDraftRows || rows.map(r => ({ ...r }))).slice();
+            draft[input.dataset.ri] = { ...draft[input.dataset.ri], [input.dataset.col]: input.value };
+            clipboardDraftRows = draft;
+            document.getElementById('clip-revert').disabled = false;
+            const title = document.getElementById('clip-editor-title');
+            if (title && !title.textContent.includes('edited')) title.textContent += ' · edited';
+        });
+    });
+
+    // ── Row add / duplicate / delete ──────────────────────────────────────────
+    const btnAdd = document.getElementById('clip-add-row');
+    if (btnAdd) btnAdd.addEventListener('click', () => {
+        const draft = (clipboardDraftRows || rows.map(r => ({ ...r }))).slice();
+        const blank = {}; cols.forEach(c => blank[c] = '');
+        draft.push(blank);
+        clipboardDraftRows = draft;
+        renderClipboardView();
+    });
+    root.querySelectorAll('.clip-row-dup').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const draft = (clipboardDraftRows || rows.map(r => ({ ...r }))).slice();
+            draft.splice(+btn.dataset.ri + 1, 0, { ...draft[+btn.dataset.ri] });
+            clipboardDraftRows = draft;
+            renderClipboardView();
+        });
+    });
+    root.querySelectorAll('.clip-row-del').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const draft = (clipboardDraftRows || rows.map(r => ({ ...r }))).slice();
+            draft.splice(+btn.dataset.ri, 1);
+            clipboardDraftRows = draft;
+            renderClipboardView();
+        });
+    });
+
+    // ── Revert / Restore / Export this entry ──────────────────────────────────
+    const btnRevert = document.getElementById('clip-revert');
+    if (btnRevert) btnRevert.addEventListener('click', () => { clipboardDraftRows = null; renderClipboardView(); });
+
+    const btnExportEntry = document.getElementById('clip-export-entry');
+    if (btnExportEntry) btnExportEntry.addEventListener('click', () => {
+        exportClipboardEntry({ ...entry, rows: clipboardDraftRows || entry.rows });
+    });
+
+    const btnRestore = document.getElementById('clip-restore');
+    const status = document.getElementById('clip-restore-status');
+    if (btnRestore) btnRestore.addEventListener('click', () => {
+        const finalRows = clipboardDraftRows || rows;
+        btnRestore.disabled = true;
+        status.textContent = 'Restoring…';
+        requestRestoreClipboard(finalRows, (ok, err) => {
+            btnRestore.disabled = false;
+            status.textContent = ok
+                ? '✓ Restored — go to IFS and use Paste Rows.'
+                : ('✗ Failed to restore' + (err ? ': ' + err : ''));
+            status.className = ok ? 'clip-status-ok' : 'clip-status-err';
+            if (ok) setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+        });
+    });
+}
+
+// ── Export / Import ────────────────────────────────────────────────────────────
+// Export: download the full history (as currently stored, including any
+// draft-less committed edits) as a single JSON file the user can archive or
+// move to another machine. Import: merge entries from a chosen file into the
+// existing history, deduped by raw JSON (same rule live captures use), so
+// importing is additive and never silently wipes what's already there.
+
+function wireClipboardImportExport(root) {
+    const exportBtn = root.querySelector('#clip-export-btn');
+    if (exportBtn) exportBtn.addEventListener('click', exportClipboardHistory);
+
+    const fileInput = root.querySelector('#clip-import-file');
+    const importBtn = root.querySelector('#clip-import-btn') || root.querySelector('#clip-import-empty');
+    if (importBtn && fileInput) {
+        importBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (file) importClipboardHistoryFromFile(file);
+            fileInput.value = ''; // allow re-selecting the same file later
+        });
+    }
+}
+
+// Shared file-download mechanics for both whole-history and single-entry export.
+function downloadJson(payload, filename) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function exportClipboardHistory() {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    downloadJson({
+        exportedFrom: 'IFS Inspector — Clipboard History',
+        exportedAt:   new Date().toISOString(),
+        entries:      clipboardHistory,
+    }, `ifs-clipboard-history_${stamp}.json`);
+}
+
+// Export a single history entry (or an entry-shaped object built from the
+// currently-open draft rows) as its own importable JSON file.
+function exportClipboardEntry(entry) {
+    const stamp = new Date(entry.ts || Date.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const pageSlug = (entry.page || 'clipboard').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'clipboard';
+    downloadJson({
+        exportedFrom: 'IFS Inspector — Clipboard History',
+        exportedAt:   new Date().toISOString(),
+        entries:      [{
+            id:   entry.id,
+            ts:   entry.ts,
+            rows: entry.rows,
+            raw:  JSON.stringify(entry.rows), // recompute in case rows were edited since capture
+            page: entry.page || null,
+            url:  entry.url  || null,
+        }],
+    }, `ifs-clipboard_${pageSlug}_${stamp}.json`);
+}
+
+function importClipboardHistoryFromFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+        let parsed;
+        try { parsed = JSON.parse(reader.result); }
+        catch (e) { alert('Import failed: file is not valid JSON.'); return; }
+
+        // Accept either our export wrapper ({ entries: [...] }) or a bare array,
+        // so files exported by an older version of this feature still import.
+        const incoming = Array.isArray(parsed) ? parsed
+                        : Array.isArray(parsed && parsed.entries) ? parsed.entries
+                        : null;
+        if (!incoming) { alert('Import failed: no recognizable history entries found in this file.'); return; }
+
+        const existingRaw = new Set(clipboardHistory.map(e => e.raw));
+        let added = 0;
+        incoming.forEach(raw => {
+            if (!raw || !Array.isArray(raw.rows) || !raw.rows.length) return;
+            const rawJson = raw.raw || JSON.stringify(raw.rows);
+            if (existingRaw.has(rawJson)) return; // skip duplicates already present
+            existingRaw.add(rawJson);
+            clipboardHistory.push({
+                id:   raw.id || (Date.now() + '-' + Math.random().toString(36).slice(2, 7)),
+                ts:   raw.ts || Date.now(),
+                rows: raw.rows,
+                raw:  rawJson,
+                page: raw.page || null,
+                url:  raw.url  || null,
+            });
+            added++;
+        });
+
+        if (!added) { alert('Nothing new to import — all entries in this file already exist in your history.'); return; }
+
+        // Newest-first, capped, same as live capture.
+        clipboardHistory.sort((a, b) => b.ts - a.ts);
+        if (clipboardHistory.length > CLIPBOARD_HISTORY_MAX) clipboardHistory.length = CLIPBOARD_HISTORY_MAX;
+        saveClipboardHistory();
+        clipboardSelectedId = clipboardHistory[0].id;
+        clipboardDraftRows = null;
+        renderClipboardView();
+    };
+    reader.onerror = () => alert('Import failed: could not read the file.');
+    reader.readAsText(file);
+}
+
+
+// Short single-line preview of a row for the history list, e.g. "310 · End Customer".
+function clipRowPreview(row) {
+    if (!row) return '';
+    const vals = Object.values(row).filter(v => v !== null && v !== undefined && v !== '');
+    return vals.slice(0, 2).join(' · ');
+}
+
+
 function extractName(url) {
     try {
         const u = new URL(url);
